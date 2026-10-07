@@ -4,6 +4,19 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
+		<script>
+			// Aplica marca y modo antes de pintar para evitar el parpadeo de tema.
+			try {
+				var project = JSON.parse(localStorage.getItem('ivideo:project') || 'null');
+				var brand = (project && project.brand) || 'default';
+				var mode = (project && project.mode) || 'auto';
+				if (mode === 'auto') {
+					mode = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+				}
+				document.documentElement.dataset.brand = brand;
+				document.documentElement.dataset.mode = mode;
+			} catch (e) {}
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

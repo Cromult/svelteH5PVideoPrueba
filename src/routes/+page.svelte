@@ -153,9 +153,9 @@
 		border-radius: 14px;
 		display: grid;
 		place-items: center;
-		color: #fff;
+		color: var(--accent-contrast, #fff);
 		font-size: 20px;
-		background: linear-gradient(135deg, var(--accent), var(--accent-2));
+		background: var(--accent);
 		box-shadow: var(--shadow);
 	}
 	h1 {

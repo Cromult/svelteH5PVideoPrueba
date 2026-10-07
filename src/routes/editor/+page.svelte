@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import BrandPicker from '#lib/components/BrandPicker.svelte';
+	import ModeToggle from '#lib/components/ModeToggle.svelte';
 	import InteractionForm from '#lib/components/editor/InteractionForm.svelte';
 	import Timeline from '#lib/components/Timeline.svelte';
 	import VideoPlayer from '#lib/components/VideoPlayer.svelte';
@@ -90,6 +92,8 @@
 {#if project.data && project.videoUrl}
 	<div class="topbar">
 		<a class="btn ghost small" href={resolve('/')}>← Inicio</a>
+		<BrandPicker />
+		<ModeToggle />
 		<input class="title-input" bind:value={project.data.title} aria-label="Título del video" />
 		{#if project.data.status === 'published'}
 			<span class="badge ok">Publicado</span>

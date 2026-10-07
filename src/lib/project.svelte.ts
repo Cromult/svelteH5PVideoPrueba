@@ -1,5 +1,5 @@
 import { clearProject, deleteVideo, loadProject, loadVideo, saveProject, saveVideo } from './storage.ts';
-import type { Interaction, InteractionType, InteractiveVideo } from './types.ts';
+import type { BrandId, Interaction, InteractionType, InteractiveVideo, ThemeMode } from './types.ts';
 
 export const uid = () =>
 	typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -58,6 +58,8 @@ class ProjectState {
 		this.loading = true;
 		const stored = loadProject();
 		if (stored) {
+			if (!stored.brand) stored.brand = 'default';
+			if (!stored.mode) stored.mode = 'auto';
 			const blob = await loadVideo(stored.videoKey).catch(() => undefined);
 			if (blob) {
 				this.setUrl(URL.createObjectURL(blob));
@@ -77,6 +79,8 @@ class ProjectState {
 		this.data = {
 			id: uid(),
 			title: title || file.name.replace(/\.[^.]+$/, ''),
+			brand: 'default',
+			mode: 'auto',
 			videoKey,
 			videoName: file.name,
 			duration: 0,
@@ -125,6 +129,19 @@ class ProjectState {
 		this.data!.interactions.push(copy);
 		this.markDraft();
 		return this.data!.interactions.at(-1)!;
+	}
+
+	setBrand(brand: BrandId) {
+		if (!this.data || this.data.brand === brand) return;
+		this.data.brand = brand;
+		this.markDraft();
+		this.persist();
+	}
+
+	setMode(mode: ThemeMode) {
+		if (!this.data || this.data.mode === mode) return;
+		this.data.mode = mode;
+		this.persist();
 	}
 
 	markDraft() {

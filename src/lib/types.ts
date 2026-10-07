@@ -3,6 +3,12 @@
 
 export type InteractionType = 'multiple-choice' | 'true-false' | 'short-answer' | 'matching';
 
+/** Paleta de marca del video (viaja en el JSON, la usa también la vista del estudiante). */
+export type BrandId = 'default' | 'esam' | 'upi';
+
+/** Modo de color de la interfaz: claro, oscuro o según el sistema. */
+export type ThemeMode = 'light' | 'dark' | 'auto';
+
 interface InteractionBase {
 	id: string;
 	type: InteractionType;
@@ -58,6 +64,10 @@ export type Interaction = MultipleChoice | TrueFalse | ShortAnswer | Matching;
 export interface InteractiveVideo {
 	id: string;
 	title: string;
+	/** Paleta de marca del proyecto. Ausente en JSON antiguos = 'default'. */
+	brand?: BrandId;
+	/** Modo de color. Ausente en JSON antiguos = 'auto'. */
+	mode?: ThemeMode;
 	/** Clave del blob del video en IndexedDB (en el LMS real: id del archivo en el storage). */
 	videoKey: string;
 	videoName: string;

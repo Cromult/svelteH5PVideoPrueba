@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import BrandPicker from '#lib/components/BrandPicker.svelte';
+	import ModeToggle from '#lib/components/ModeToggle.svelte';
 	import InteractionOverlay from '#lib/components/player/InteractionOverlay.svelte';
 	import ResultsSummary from '#lib/components/player/ResultsSummary.svelte';
 	import Timeline from '#lib/components/Timeline.svelte';
@@ -142,6 +144,8 @@
 {#if project.data && project.videoUrl}
 	<div class="topbar">
 		<a class="btn ghost small" href={resolve('/editor')}>← Volver al editor</a>
+		<BrandPicker />
+		<ModeToggle />
 		<span class="title">{project.data.title}</span>
 		<span class="badge">👁 Vista del estudiante</span>
 		<span class="spacer"></span>

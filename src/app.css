@@ -1,13 +1,14 @@
 :root {
-	--bg: #f5f6fa;
+	--bg: #ffffff;
 	--surface: #ffffff;
-	--surface-2: #f0f2f7;
+	--surface-2: #f2f3f7;
 	--border: #e2e5ee;
 	--text: #161a26;
 	--muted: #646b80;
 	--accent: #5b5bf0;
 	--accent-2: #8b5cf6;
 	--accent-soft: #ececfe;
+	--accent-contrast: #ffffff;
 	--ok: #16a34a;
 	--ok-soft: #dcfce7;
 	--bad: #dc2626;
@@ -20,26 +21,89 @@
 	color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-	:root {
-		--bg: #0d0f15;
-		--surface: #161922;
-		--surface-2: #1d212c;
-		--border: #2a2f3d;
-		--text: #e9ebf2;
-		--muted: #9aa1b4;
-		--accent: #7c7cff;
-		--accent-2: #a78bfa;
-		--accent-soft: #23234a;
-		--ok: #22c55e;
-		--ok-soft: #12301f;
-		--bad: #f87171;
-		--bad-soft: #3a1717;
-		--warn: #f59e0b;
-		--warn-soft: #3a2a0b;
-		--shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
-		color-scheme: dark;
-	}
+/* Modo oscuro. Se aplica con data-mode en <html>; 'auto' se resuelve en JS. */
+:root[data-mode='dark'] {
+	--bg: #0d0f15;
+	--surface: #161922;
+	--surface-2: #1d212c;
+	--border: #2a2f3d;
+	--text: #e9ebf2;
+	--muted: #9aa1b4;
+	--accent: #7c7cff;
+	--accent-2: #a78bfa;
+	--accent-soft: #23234a;
+	--accent-contrast: #ffffff;
+	--ok: #22c55e;
+	--ok-soft: #12301f;
+	--bad: #f87171;
+	--bad-soft: #3a1717;
+	--warn: #f59e0b;
+	--warn-soft: #3a2a0b;
+	--shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
+	color-scheme: dark;
+}
+
+/*
+ * Paletas de marca. Se combinan con `data-brand` y `data-mode` en <html>.
+ * El modo claro usa fondo blanco con los colores de cada tema.
+ */
+
+/* ESAM · azul marino #042C4F + dorado #FBCE04 + blanco */
+:root[data-brand='esam'][data-mode='light'] {
+	--bg: #ffffff;
+	--surface: #ffffff;
+	--surface-2: #eef1f7;
+	--border: #d9e0ec;
+	--text: #042c4f;
+	--muted: #5c6d86;
+	--accent: #042c4f;
+	--accent-2: #fbce04;
+	--accent-soft: #eef2f8;
+	--accent-contrast: #ffffff;
+	color-scheme: light;
+}
+
+:root[data-brand='esam'][data-mode='dark'] {
+	--bg: #051c33;
+	--surface: #082a49;
+	--surface-2: #0d3760;
+	--border: #17456f;
+	--text: #eaf2fb;
+	--muted: #9db4d1;
+	--accent: #fbce04;
+	--accent-2: #6f9ed6;
+	--accent-soft: #0d3760;
+	--accent-contrast: #042c4f;
+	color-scheme: dark;
+}
+
+/* UPI · naranja #FF8200 + negro + blanco */
+:root[data-brand='upi'][data-mode='light'] {
+	--bg: #ffffff;
+	--surface: #ffffff;
+	--surface-2: #fff2e5;
+	--border: #f2ddc6;
+	--text: #1a1a1a;
+	--muted: #6f675e;
+	--accent: #ff8200;
+	--accent-2: #ffa640;
+	--accent-soft: #ffe9d1;
+	--accent-contrast: #1a1a1a;
+	color-scheme: light;
+}
+
+:root[data-brand='upi'][data-mode='dark'] {
+	--bg: #16130f;
+	--surface: #201b15;
+	--surface-2: #2b241c;
+	--border: #423628;
+	--text: #f4efe8;
+	--muted: #b7a894;
+	--accent: #ff8200;
+	--accent-2: #ff9a33;
+	--accent-soft: #3a2a17;
+	--accent-contrast: #1a1a1a;
+	color-scheme: dark;
 }
 
 *,
@@ -108,7 +172,7 @@ textarea {
 .btn.primary {
 	background: var(--accent);
 	border-color: var(--accent);
-	color: #fff;
+	color: var(--accent-contrast, #fff);
 }
 .btn.primary:hover:not(:disabled) {
 	filter: brightness(1.08);
