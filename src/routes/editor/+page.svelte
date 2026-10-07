@@ -104,6 +104,21 @@
 		else if (kind === 'resource') project.addResourceLesson();
 	}
 
+	function publish() {
+		project.publish();
+	}
+
+	function downloadJson() {
+		if (!project.data) return;
+		const data = $state.snapshot(project.data);
+		const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+		const a = document.createElement('a');
+		a.href = URL.createObjectURL(blob);
+		a.download = `curso-${(project.data.title || 'demo').replace(/[^\w-]+/g, '_')}.json`;
+		a.click();
+		setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+	}
+
 	function onKey(e: KeyboardEvent) {
 		const target = e.target as HTMLElement;
 		if (target.closest('input, textarea, select, [contenteditable]') || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -133,6 +148,10 @@
 		{/if}
 		<span class="muted save">{saved ? 'Guardado' : 'Guardando…'}</span>
 		<span class="spacer"></span>
+		<button class="btn small ghost" onclick={downloadJson} title="Exportar el curso como JSON">⬇ JSON</button>
+		{#if project.data.status !== 'published'}
+			<button class="btn small" onclick={publish}>🚀 Publicar</button>
+		{/if}
 		<a class="btn small" href={resolve('/scorm')}>🎓 Simular SCORM</a>
 		<a class="btn primary" href={resolve('/preview')}>👁 Previsualizar</a>
 	</div>
