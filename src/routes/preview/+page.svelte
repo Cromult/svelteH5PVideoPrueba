@@ -149,6 +149,7 @@
 		<span class="title">{project.data.title}</span>
 		<span class="badge">👁 Vista del estudiante</span>
 		<span class="spacer"></span>
+		<a class="btn small" href={resolve('/scorm')}>🎓 Simular SCORM</a>
 		<span class="score" title="Puntaje actual">
 			<b>{score}</b>/{maxScore} pts · {answeredCount}/{interactions.length} respondidas
 		</span>

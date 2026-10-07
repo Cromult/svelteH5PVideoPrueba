@@ -102,6 +102,7 @@
 		{/if}
 		<span class="muted save">{saved ? 'Guardado' : 'Guardando…'}</span>
 		<span class="spacer"></span>
+		<a class="btn small" href={resolve('/scorm')}>🎓 Simular SCORM</a>
 		<a class="btn primary" href={resolve('/preview')}>👁 Previsualizar como estudiante</a>
 	</div>
 
