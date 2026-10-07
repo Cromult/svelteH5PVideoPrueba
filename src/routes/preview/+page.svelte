@@ -9,33 +9,122 @@
 	import VideoPlayer from '#lib/components/VideoPlayer.svelte';
 	import { validate } from '#lib/grading.ts';
 	import { project } from '#lib/project.svelte.ts';
-	import type { GradeResult, Interaction, Response } from '#lib/types.ts';
+	import { loadAsset, loadVideo } from '#lib/storage.ts';
+	import { lessonInteractions, LESSON_ICONS, LESSON_LABELS, type GradeResult, type Interaction, type Lesson, type Response } from '#lib/types.ts';
 
 	if (!project.data) void goto(resolve('/'), { replaceState: true });
+
+	let index = $state(0);
+	let mediaUrl = $state<string | null>(null);
 
 	let player = $state<VideoPlayer>();
 	let currentTime = $state(0);
 	let duration = $state(0);
 	let paused = $state(true);
 
-	// Intento del estudiante (en el LMS real se enviaría a NestJS por cada respuesta).
 	let results = $state<Record<string, GradeResult>>({});
-	let responses: Record<string, Response> = {};
 	let skipped = $state<Record<string, true>>({});
+	let viewDone = $state<Record<string, true>>({});
 	let active = $state<Interaction | null>(null);
 	let finished = $state(false);
 	let toast = $state('');
-	let publishOpen = $state(false);
 
-	// Solo se muestran preguntas válidas (las incompletas se avisan arriba).
-	const interactions = $derived(project.sorted.filter((i) => validate(i).length === 0));
-	const invalidCount = $derived(project.sorted.length - interactions.length);
-	const handled = (i: Interaction) => !!results[i.id] || !!skipped[i.id];
+	const lessons = $derived(project.data?.lessons ?? []);
+	const lesson = $derived<Lesson | undefined>(lessons[index]);
+	const sequential = $derived(project.data?.sequential ?? true);
+	const courseThreshold = $derived(project.data?.threshold ?? 0.6);
 
-	const blocker = $derived(interactions.find((i) => i.required && !handled(i)) ?? null);
-	const score = $derived(Math.round(Object.values(results).reduce((s, r) => s + r.score, 0) * 100) / 100);
-	const maxScore = $derived(interactions.reduce((s, i) => s + i.points, 0));
-	const answeredCount = $derived(interactions.filter((i) => results[i.id]).length);
+	const ints = $derived(lesson ? validInts(lesson) : []);
+	const passedCount = $derived(lessons.filter((l) => lessonPassed(l)).length);
+
+	function validInts(l: Lesson): Interaction[] {
+		return lessonInteractions(l)
+			.filter((i) => validate(i).length === 0)
+			.sort((a, b) => a.time - b.time);
+	}
+
+	function lessonScore(l: Lesson): { score: number; max: number; percent: number } {
+		const list = validInts(l);
+		const max = list.reduce((s, i) => s + i.points, 0);
+		const score = Math.round(list.reduce((s, i) => s + (results[i.id]?.score ?? 0), 0) * 100) / 100;
+		return { score, max, percent: max ? score / max : 1 };
+	}
+
+	function thresholdFor(l: Lesson): number {
+		return l.kind === 'quiz' ? l.threshold : courseThreshold;
+	}
+
+	function lessonPassed(l: Lesson): boolean {
+		if (l.kind === 'content' || l.kind === 'resource') return !!viewDone[l.id];
+		const list = validInts(l);
+		if (list.length === 0) return l.kind === 'quiz' ? true : !!viewDone[l.id];
+		return lessonScore(l).percent >= thresholdFor(l);
+	}
+
+	function unlocked(i: number): boolean {
+		if (!sequential || i === 0) return true;
+		return lessonPassed(lessons[i - 1]);
+	}
+
+	function go(i: number) {
+		if (i < 0 || i >= lessons.length || !unlocked(i)) return;
+		index = i;
+		active = null;
+		finished = false;
+		currentTime = 0;
+		flash(`Elemento ${i + 1}: ${lessons[i].title}`);
+	}
+
+	function next() {
+		if (lessonPassed(lessons[index]) && index < lessons.length - 1) go(index + 1);
+		else if (index >= lessons.length - 1) flash('¡Curso completado!');
+		else flash('Aprueba este elemento para continuar');
+	}
+
+	// Carga el video o activo de la lección actual.
+	$effect(() => {
+		const l = lesson;
+		let url: string | null = null;
+		let cancelled = false;
+		mediaUrl = null;
+		(async () => {
+			if (l?.kind === 'video') {
+				const b = await loadVideo(l.videoKey).catch(() => undefined);
+				if (!cancelled && b) {
+					url = URL.createObjectURL(b);
+					mediaUrl = url;
+				}
+			} else if (l?.kind === 'content' && l.imageKey) {
+				const b = await loadAsset(l.imageKey).catch(() => undefined);
+				if (!cancelled && b) {
+					url = URL.createObjectURL(b);
+					mediaUrl = url;
+				}
+			} else if (l?.kind === 'resource' && l.fileKey) {
+				const b = await loadAsset(l.fileKey).catch(() => undefined);
+				if (!cancelled && b) {
+					url = URL.createObjectURL(b);
+					mediaUrl = url;
+				}
+			}
+		})();
+		return () => {
+			cancelled = true;
+			if (url) URL.revokeObjectURL(url);
+		};
+	});
+
+	// Abre automáticamente la primera pregunta pendiente del cuestionario.
+	$effect(() => {
+		if (lesson?.kind !== 'quiz' || active) return;
+		const pending = ints.find((i) => !results[i.id]);
+		if (pending) active = pending;
+		else if (ints.length) finished = true;
+	});
+
+	const done = (i: Interaction) =>
+		i.required ? !!results[i.id]?.correct : !!results[i.id] || !!skipped[i.id];
+	const blocker = $derived(ints.find((i) => !done(i) && i.required) ?? null);
 
 	const markerStates = $derived(
 		Object.fromEntries(
@@ -45,53 +134,49 @@
 
 	function open(i: Interaction) {
 		player?.pause();
-		player?.seek(i.time, { force: true });
+		if (lesson?.kind === 'video') player?.seek(i.time, { force: true });
 		active = i;
 	}
 
-	/** En cada frame: si el video cruzó el tiempo de una pregunta pendiente, se detiene ahí. */
 	function onframe(prev: number, now: number) {
-		if (active || finished) return;
-		const hit = interactions.find((i) => !handled(i) && i.time > prev - 0.05 && i.time <= now);
+		if (active || finished || lesson?.kind !== 'video') return;
+		const hit = ints.find((i) => !done(i) && i.time > prev - 0.05 && i.time <= now);
 		if (hit) open(hit);
 	}
 
 	function clampSeek(target: number) {
 		if (blocker && target > blocker.time) {
-			flash('Responde la pregunta obligatoria para avanzar');
+			flash('Responde correctamente para avanzar');
 			return blocker.time;
 		}
 		return target;
 	}
 
-	function seekFromBar(t: number) {
-		if (active) return;
-		finished = false;
-		player?.seek(t);
-	}
-
 	function onended() {
-		const pending = interactions.find((i) => !handled(i) && i.time >= currentTime - 0.6);
+		const pending = ints.find((i) => !done(i));
 		if (pending) open(pending);
-		else finished = true;
+		else {
+			finished = true;
+			if (lesson?.kind === 'video' && ints.length === 0 && lesson) viewDone[lesson.id] = true;
+		}
 	}
 
 	function onanswer(response: Response, result: GradeResult) {
 		if (!active) return;
-		responses[active.id] = response;
 		results[active.id] = result;
+		if (lesson?.kind === 'quiz') {
+			const pending = ints.find((i) => !results[i.id]);
+			active = pending ?? null;
+			if (!pending) finished = true;
+		}
 	}
 
 	function resume() {
 		active = null;
-		player?.play();
+		if (lesson?.kind === 'video') player?.play();
 	}
 
 	function rewind(time: number) {
-		if (!active) return;
-		// La pregunta vuelve a quedar pendiente: aparecerá de nuevo al llegar a ella.
-		delete results[active.id];
-		delete responses[active.id];
 		active = null;
 		player?.seek(time, { force: true });
 		player?.play();
@@ -103,19 +188,29 @@
 		resume();
 	}
 
-	function restart() {
-		results = {};
-		responses = {};
-		skipped = {};
+	function restartLesson() {
+		const l = lesson;
+		if (!l) return;
+		for (const i of validInts(l)) {
+			delete results[i.id];
+			delete skipped[i.id];
+		}
+		delete viewDone[l.id];
 		active = null;
 		finished = false;
 		player?.seek(0, { force: true });
-		player?.play();
+		if (l.kind === 'quiz') {
+			const first = ints[0] ?? null;
+			active = first;
+		} else if (l.kind === 'video') {
+			player?.play();
+		}
 	}
 
-	function review(i: Interaction) {
-		finished = false;
-		player?.seek(Math.max(0, i.time - 5), { force: true });
+	function markViewed() {
+		if (!lesson) return;
+		viewDone[lesson.id] = true;
+		flash('Elemento completado');
 	}
 
 	let toastTimer: ReturnType<typeof setTimeout>;
@@ -124,183 +219,327 @@
 		clearTimeout(toastTimer);
 		toastTimer = setTimeout(() => (toast = ''), 2200);
 	}
-
-	function publish() {
-		project.publish();
-		publishOpen = true;
-	}
-
-	function downloadJson() {
-		const data = $state.snapshot(project.data);
-		const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-		const a = document.createElement('a');
-		a.href = URL.createObjectURL(blob);
-		a.download = `video-interactivo-${(project.data?.title || 'demo').replace(/[^\w-]+/g, '_')}.json`;
-		a.click();
-		setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-	}
 </script>
 
-{#if project.data && project.videoUrl}
+{#if project.data}
 	<div class="topbar">
-		<a class="btn ghost small" href={resolve('/editor')}>← Volver al editor</a>
+		<a class="btn ghost small" href={resolve('/editor')}>← Editor</a>
 		<BrandPicker />
 		<ModeToggle />
 		<span class="title">{project.data.title}</span>
-		<span class="badge">👁 Vista del estudiante</span>
 		<span class="spacer"></span>
 		<a class="btn small" href={resolve('/scorm')}>🎓 Simular SCORM</a>
-		<span class="score" title="Puntaje actual">
-			<b>{score}</b>/{maxScore} pts · {answeredCount}/{interactions.length} respondidas
-		</span>
-		{#if project.data.status === 'published'}
-			<button class="btn" onclick={() => (publishOpen = true)}>✓ Publicado</button>
-		{:else}
-			<button class="btn primary" onclick={publish} disabled={invalidCount > 0 || interactions.length === 0}>
-				🚀 Publicar
-			</button>
-		{/if}
+		<span class="score">{passedCount}/{lessons.length} completados</span>
 	</div>
 
 	<main>
-		{#if invalidCount > 0}
-			<p class="warning">
-				⚠ {invalidCount} pregunta(s) incompleta(s) no se muestran al estudiante. Complétalas en el editor para poder publicar.
-			</p>
-		{/if}
+		<nav class="lessons card">
+			<h2>Contenido del curso</h2>
+			<ol>
+				{#each lessons as l, i (l.id)}
+					<li class:on={i === index}>
+						<button class="item" disabled={!unlocked(i)} onclick={() => go(i)}>
+							<span class="num">{unlocked(i) ? i + 1 : '🔒'}</span>
+							<span class="ico">{LESSON_ICONS[l.kind]}</span>
+							<span class="q">
+								{l.title}
+								<small class="muted">{LESSON_LABELS[l.kind]} · {lessonPassed(l) ? '✓ completado' : 'pendiente'}</small>
+							</span>
+						</button>
+					</li>
+				{/each}
+			</ol>
+		</nav>
 
-		<div class="player-wrap">
-			<VideoPlayer
-				bind:this={player}
-				src={project.videoUrl}
-				bind:currentTime
-				bind:duration
-				bind:paused
-				{clampSeek}
-				{onframe}
-				{onended}
-				locked={!!active || finished}
-				overlayOpen={!!active || finished}
-			>
-				{#snippet bar()}
-					<Timeline
-						{duration}
-						{currentTime}
-						{interactions}
-						states={markerStates}
-						limit={blocker?.time ?? null}
-						onseek={seekFromBar}
-						onselect={(id) => {
-							const i = interactions.find((x) => x.id === id);
-							if (i && !active) seekFromBar(i.time);
-						}}
-					/>
-				{/snippet}
-				{#snippet overlay()}
-					{#if active}
-						{#key active.id}
-							<InteractionOverlay
-								interaction={active}
-								index={interactions.indexOf(active)}
-								total={interactions.length}
-								{onanswer}
-								oncontinue={resume}
-								onrewind={rewind}
-								onskip={skip}
-								onretry={() => active && delete results[active.id]}
-							/>
-						{/key}
-					{:else if finished}
-						<ResultsSummary {interactions} {results} onrestart={restart} onreview={review}>
-							{#snippet actions()}
-								<a class="btn" href={resolve('/editor')}>✎ Editar preguntas</a>
-								{#if project.data?.status !== 'published'}
-									<button class="btn primary" onclick={publish} disabled={invalidCount > 0}>🚀 Publicar</button>
-								{/if}
-							{/snippet}
-						</ResultsSummary>
-					{/if}
-				{/snippet}
-			</VideoPlayer>
-
-			{#if toast}
-				<div class="toast" role="status">{toast}</div>
-			{/if}
-		</div>
-
-		<p class="muted help">
-			Así lo verá el estudiante: el video se detiene en cada pregunta. Las obligatorias no dejan adelantar (zona rayada
-			en la barra). Teclas: <kbd>Espacio</kbd> reproducir/pausar · <kbd>←</kbd>/<kbd>→</kbd> 5 s.
-		</p>
-	</main>
-
-	{#if publishOpen}
-		<div class="modal-bg" onclick={(e) => e.target === e.currentTarget && (publishOpen = false)} role="presentation">
-			<div class="card modal" role="dialog" aria-modal="true" aria-labelledby="pub-title">
-				<span class="big">🚀</span>
-				<h2 id="pub-title">Video publicado (simulado)</h2>
-				<p class="muted">
-					En el LMS real, aquí el front enviaría este JSON a NestJS y el MP4 al almacenamiento de archivos. Los
-					estudiantes verían exactamente esta vista.
-				</p>
-				<pre>{JSON.stringify(
-						{
-							title: project.data.title,
-							status: project.data.status,
-							duration: Math.round(project.data.duration),
-							interactions: interactions.length,
-							maxScore
-						},
-						null,
-						2
-					)}</pre>
-				<div class="row">
-					<button class="btn" onclick={downloadJson}>⬇ Descargar JSON completo</button>
-					<button class="btn primary" onclick={() => (publishOpen = false)}>Cerrar</button>
+		<section class="stage">
+			{#if lesson}
+				<div class="stagehead">
+					<span class="badge">{LESSON_LABELS[lesson.kind]}</span>
+					<h1>{lesson.title}</h1>
+					<span class="spacer"></span>
+					<button class="btn small" onclick={restartLesson}>↻ Reiniciar elemento</button>
+					<button class="btn primary small" disabled={!lessonPassed(lesson)} onclick={next}>
+						{index >= lessons.length - 1 ? 'Finalizar' : 'Siguiente →'}
+					</button>
 				</div>
-			</div>
-		</div>
-	{/if}
+
+				{#if lesson.kind === 'video'}
+					<div class="player-wrap">
+						{#if mediaUrl}
+							<VideoPlayer
+								bind:this={player}
+								src={mediaUrl}
+								bind:currentTime
+								bind:duration
+								bind:paused
+								{clampSeek}
+								{onframe}
+								{onended}
+								locked={!!active || finished}
+								overlayOpen={!!active || finished}
+							>
+								{#snippet bar()}
+									<Timeline
+										{duration}
+										{currentTime}
+										interactions={ints}
+										states={markerStates}
+										limit={blocker?.time ?? null}
+										onseek={(t) => {
+											if (!active) {
+												finished = false;
+												player?.seek(t);
+											}
+										}}
+										onselect={(id) => {
+											const i = ints.find((x) => x.id === id);
+											if (i && !active) player?.seek(i.time);
+										}}
+									/>
+								{/snippet}
+								{#snippet overlay()}
+									{#if active}
+										{#key active.id}
+											<InteractionOverlay
+												interaction={active.required
+													? { ...active, onFailSeekTo: active.onFailSeekTo ?? Math.max(0, active.time - 5) }
+													: active}
+												index={ints.indexOf(active)}
+												total={ints.length}
+												{onanswer}
+												oncontinue={resume}
+												onrewind={rewind}
+												onskip={skip}
+												onretry={() => active && delete results[active.id]}
+											/>
+										{/key}
+									{:else if finished}
+										<ResultsSummary
+											interactions={ints}
+											{results}
+											onrestart={restartLesson}
+											onreview={(i) => {
+												finished = false;
+												player?.seek(Math.max(0, i.time - 5), { force: true });
+											}}
+										>
+											{#snippet actions()}
+												<button class="btn primary" disabled={!lessonPassed(lesson)} onclick={next}>Siguiente →</button>
+											{/snippet}
+										</ResultsSummary>
+									{/if}
+								{/snippet}
+							</VideoPlayer>
+						{:else}
+							<p class="muted center-note">Cargando video…</p>
+						{/if}
+					</div>
+				{:else if lesson.kind === 'quiz'}
+					<div class="quiz">
+						{#if active}
+							{#key active.id}
+								<InteractionOverlay
+									interaction={active}
+									index={ints.indexOf(active)}
+									total={ints.length}
+									{onanswer}
+									oncontinue={resume}
+									onrewind={() => (active = null)}
+									onretry={() => active && delete results[active.id]}
+								/>
+							{/key}
+						{:else if finished}
+							<ResultsSummary
+								interactions={ints}
+								{results}
+								onrestart={restartLesson}
+								onreview={(i) => (active = i)}
+							>
+								{#snippet actions()}
+									<button class="btn primary" disabled={!lessonPassed(lesson)} onclick={next}>Siguiente →</button>
+								{/snippet}
+							</ResultsSummary>
+						{:else if ints.length === 0}
+							<p class="muted center-note">Este cuestionario aún no tiene preguntas.</p>
+						{/if}
+					</div>
+				{:else if lesson.kind === 'content'}
+					<article class="content card">
+						{#if mediaUrl}<img src={mediaUrl} alt={lesson.imageName ?? ''} />{/if}
+						{#if lesson.body}<p class="body">{lesson.body}</p>{:else}<p class="muted">Página sin contenido.</p>{/if}
+						<button class="btn primary" onclick={markViewed} disabled={!!viewDone[lesson.id]}>
+							{viewDone[lesson.id] ? '✓ Visto' : 'Marcar como visto'}
+						</button>
+					</article>
+				{:else if lesson.kind === 'resource'}
+					<article class="content card">
+						<p class="body">{lesson.description || 'Recurso adjunto.'}</p>
+						<div class="res-actions">
+							{#if lesson.url}<a class="btn" href={lesson.url} target="_blank" rel="noopener">🔗 Abrir enlace</a>{/if}
+							{#if mediaUrl}<a class="btn" href={mediaUrl} download={lesson.fileName}>⬇ Descargar {lesson.fileName}</a>{/if}
+							<button class="btn primary" onclick={markViewed} disabled={!!viewDone[lesson.id]}>
+								{viewDone[lesson.id] ? '✓ Visto' : 'Marcar como visto'}
+							</button>
+						</div>
+					</article>
+				{/if}
+			{:else}
+				<p class="muted center-note">El curso no tiene elementos.</p>
+			{/if}
+			{#if toast}<div class="toast" role="status">{toast}</div>{/if}
+		</section>
+	</main>
 {/if}
 
 <style>
+	.title {
+		font-weight: 700;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 40vw;
+	}
 	.score {
-		font-size: 14px;
+		font-size: 13px;
 		color: var(--muted);
 		font-variant-numeric: tabular-nums;
 	}
-	.score b {
-		color: var(--text);
-	}
 	main {
-		max-width: 1100px;
+		display: grid;
+		grid-template-columns: 280px minmax(0, 1fr);
+		gap: 18px;
+		align-items: start;
+		max-width: 1200px;
 		margin: 0 auto;
 		padding: 20px;
-		display: grid;
-		gap: 14px;
 	}
-	@media (max-width: 640px) {
+	@media (max-width: 900px) {
 		main {
+			grid-template-columns: 1fr;
 			padding: 16px;
 		}
-		.score {
-			display: none;
+	}
+	.lessons {
+		padding: 16px;
+		position: sticky;
+		top: 72px;
+	}
+	@media (max-width: 900px) {
+		.lessons {
+			position: static;
 		}
 	}
-	.warning {
-		margin: 0;
-		padding: 10px 14px;
-		border-radius: var(--radius);
-		background: var(--warn-soft);
-		color: var(--warn);
-		font-size: 14px;
+	.lessons h2 {
+		font-size: 15px;
+		margin-bottom: 10px;
 	}
-	.player-wrap {
+	.lessons ol {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: grid;
+		gap: 4px;
+	}
+	.lessons li.on {
+		outline: 2px solid var(--accent);
+		border-radius: var(--radius);
+	}
+	.item {
+		width: 100%;
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		text-align: left;
+		padding: 8px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--surface);
+		cursor: pointer;
+	}
+	.item:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+	.item .num {
+		width: 22px;
+		height: 22px;
+		border-radius: 50%;
+		background: var(--surface-2);
+		display: grid;
+		place-items: center;
+		font-size: 11px;
+		font-weight: 700;
+		flex: none;
+	}
+	.item .ico {
+		font-size: 15px;
+	}
+	.item .q {
+		display: grid;
+		min-width: 0;
+		font-size: 13px;
+		font-weight: 600;
+	}
+	.item .q small {
+		font-weight: 400;
+		font-size: 11px;
+	}
+	.stage {
+		display: grid;
+		gap: 14px;
 		position: relative;
+	}
+	.stagehead {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+	}
+	.stagehead h1 {
+		font-size: 19px;
+	}
+	.spacer {
+		flex: 1;
+	}
+	.player-wrap .center-note {
+		padding: 40px;
+		text-align: center;
+	}
+	.quiz {
+		background: var(--surface-2);
+		border-radius: var(--radius-lg);
+		padding: 24px;
+		display: grid;
+		place-items: center;
+		min-height: 340px;
+	}
+	.content {
+		padding: 24px;
+		display: grid;
+		gap: 16px;
+		justify-items: start;
+	}
+	.content img {
+		max-width: 100%;
+		border-radius: var(--radius);
+	}
+	.content .body {
+		margin: 0;
+		white-space: pre-wrap;
+		line-height: 1.6;
+	}
+	.res-actions {
+		display: flex;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.center-note {
+		text-align: center;
+		padding: 40px;
 	}
 	.toast {
 		position: absolute;
-		top: 16px;
+		top: 0;
 		left: 50%;
 		transform: translateX(-50%);
 		background: #111827ee;
@@ -310,56 +549,5 @@
 		font-size: 14px;
 		font-weight: 500;
 		z-index: 5;
-		animation: drop 0.2s ease-out;
-	}
-	@keyframes drop {
-		from {
-			opacity: 0;
-			transform: translate(-50%, -6px);
-		}
-	}
-	.help {
-		font-size: 13px;
-		margin: 0;
-	}
-	.modal-bg {
-		position: fixed;
-		inset: 0;
-		z-index: 50;
-		background: rgb(0 0 0 / 0.45);
-		display: grid;
-		place-items: center;
-		padding: 16px;
-	}
-	.modal {
-		width: min(480px, 100%);
-		padding: 24px;
-		display: grid;
-		gap: 10px;
-		justify-items: center;
-		text-align: center;
-	}
-	.modal p {
-		margin: 0;
-		font-size: 14px;
-	}
-	.big {
-		font-size: 36px;
-	}
-	pre {
-		width: 100%;
-		text-align: left;
-		margin: 6px 0;
-		padding: 12px;
-		border-radius: var(--radius);
-		background: var(--surface-2);
-		font-size: 12px;
-		overflow: auto;
-	}
-	.row {
-		display: flex;
-		gap: 8px;
-		flex-wrap: wrap;
-		justify-content: center;
 	}
 </style>

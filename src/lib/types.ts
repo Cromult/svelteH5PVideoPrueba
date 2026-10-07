@@ -77,6 +77,89 @@ export interface InteractiveVideo {
 	interactions: Interaction[];
 }
 
+// ---------------------------------------------------------------------------
+// Curso multi-lección: un curso contiene elementos ordenados (videos, páginas de
+// contenido, cuestionarios sin video y recursos descargables).
+// ---------------------------------------------------------------------------
+
+export type LessonKind = 'video' | 'content' | 'quiz' | 'resource';
+
+interface LessonBase {
+	id: string;
+	title: string;
+}
+
+export interface VideoLesson extends LessonBase {
+	kind: 'video';
+	/** Clave del blob del video en IndexedDB. */
+	videoKey: string;
+	videoName: string;
+	duration: number;
+	interactions: Interaction[];
+}
+
+export interface ContentLesson extends LessonBase {
+	kind: 'content';
+	/** Texto de la página (se respetan los saltos de línea). */
+	body: string;
+	imageKey?: string;
+	imageName?: string;
+}
+
+export interface QuizLesson extends LessonBase {
+	kind: 'quiz';
+	interactions: Interaction[];
+	/** Umbral de acierto (0..1) para aprobar el cuestionario. */
+	threshold: number;
+}
+
+export interface ResourceLesson extends LessonBase {
+	kind: 'resource';
+	description: string;
+	/** Enlace externo. */
+	url?: string;
+	/** Archivo adjunto en IndexedDB. */
+	fileKey?: string;
+	fileName?: string;
+}
+
+export type Lesson = VideoLesson | ContentLesson | QuizLesson | ResourceLesson;
+
+export interface Course {
+	id: string;
+	title: string;
+	/** Paleta de marca del curso. Ausente en JSON antiguos = 'default'. */
+	brand?: BrandId;
+	/** Modo de color. Ausente en JSON antiguos = 'auto'. */
+	mode?: ThemeMode;
+	status: 'draft' | 'published';
+	updatedAt: string;
+	/** true = hay que aprobar un elemento para desbloquear el siguiente. */
+	sequential: boolean;
+	/** Umbral de dominio por defecto (0..1) para videos y cuestionarios. */
+	threshold: number;
+	lessons: Lesson[];
+}
+
+/** Interacciones de una lección (solo videos y cuestionarios las tienen). */
+export function lessonInteractions(lesson: Lesson): Interaction[] {
+	return lesson.kind === 'video' || lesson.kind === 'quiz' ? lesson.interactions : [];
+}
+
+export const LESSON_LABELS: Record<LessonKind, string> = {
+	video: 'Video',
+	content: 'Contenido',
+	quiz: 'Cuestionario',
+	resource: 'Recurso'
+};
+
+export const LESSON_ICONS: Record<LessonKind, string> = {
+	video: '🎬',
+	content: '📄',
+	quiz: '📝',
+	resource: '📎'
+};
+
 // Respuestas del estudiante, una forma por tipo.
 export type Response =
 	| { type: 'multiple-choice'; selected: string[] }

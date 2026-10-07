@@ -2,22 +2,29 @@
 	import { goto } from '$app/navigation';
 	import { asset, resolve } from '$app/paths';
 	import { formatTime, project } from '#lib/project.svelte.ts';
+	import { lessonInteractions, LESSON_ICONS, type Lesson } from '#lib/types.ts';
 
 	let title = $state('');
-	let file = $state<File | null>(null);
+	let files = $state<File[]>([]);
 	let dragOver = $state(false);
 	let busy = $state(false);
 	let error = $state('');
 
-	function pick(f: File | undefined | null) {
+	const totalDuration = $derived(
+		(project.data?.lessons ?? []).reduce((s, l) => s + (l.kind === 'video' ? l.duration : 0), 0)
+	);
+	const totalQuestions = $derived((project.data?.lessons ?? []).reduce((s, l) => s + lessonInteractions(l).length, 0));
+
+	function pick(list: FileList | File[] | null | undefined) {
 		error = '';
-		if (!f) return;
-		if (!f.type.startsWith('video/')) {
-			error = 'El archivo debe ser un video (MP4 recomendado).';
+		if (!list) return;
+		const chosen = Array.from(list).filter((f) => f.type.startsWith('video/'));
+		if (!chosen.length) {
+			error = 'Los archivos deben ser videos (MP4 recomendado).';
 			return;
 		}
-		file = f;
-		if (!title) title = f.name.replace(/\.[^.]+$/, '');
+		files = chosen;
+		if (!title) title = chosen[0].name.replace(/\.[^.]+$/, '');
 	}
 
 	async function useSample() {
@@ -26,7 +33,7 @@
 		try {
 			const res = await fetch(asset('video-ejemplo.mp4'));
 			const blob = await res.blob();
-			file = new File([blob], 'video-ejemplo.mp4', { type: 'video/mp4' });
+			files = [new File([blob], 'video-ejemplo.mp4', { type: 'video/mp4' })];
 			if (!title) title = 'Video de ejemplo';
 		} catch (e) {
 			error = 'No se pudo cargar el video de ejemplo: ' + (e as Error).message;
@@ -36,15 +43,28 @@
 	}
 
 	async function create() {
-		if (!file) return;
+		if (!files.length) return;
 		busy = true;
 		try {
-			await project.createFromFile(file, title.trim());
+			await project.createCourseFromFiles(files, title.trim());
 			await goto(resolve('/editor'));
 		} catch (e) {
-			error = 'No se pudo guardar el video en el navegador: ' + (e as Error).message;
+			error = 'No se pudo guardar en el navegador: ' + (e as Error).message;
 		} finally {
 			busy = false;
+		}
+	}
+
+	function lessonSummary(l: Lesson): string {
+		switch (l.kind) {
+			case 'video':
+				return `${formatTime(l.duration)} · ${l.interactions.length} pregunta(s)`;
+			case 'quiz':
+				return `${l.interactions.length} pregunta(s)`;
+			case 'content':
+				return l.imageKey ? 'Página con imagen' : 'Página de texto';
+			case 'resource':
+				return l.url || l.fileName || 'Recurso';
 		}
 	}
 </script>
@@ -53,40 +73,45 @@
 	<header>
 		<span class="logo">▶</span>
 		<div>
-			<h1>Video interactivo</h1>
-			<p class="muted">Demo aislada del LMS · Editor + vista del estudiante, sin H5P</p>
+			<h1>Curso interactivo</h1>
+			<p class="muted">Demo aislada del LMS · Curso con varios videos y elementos, editor + vista del estudiante</p>
 		</div>
 	</header>
 
 	{#if project.data}
 		<section class="card current">
 			<div class="info">
-				<span class="label">Proyecto guardado en este navegador</span>
+				<span class="label">Curso guardado en este navegador</span>
 				<h2>{project.data.title}</h2>
 				<p class="muted">
-					{project.data.videoName} · {formatTime(project.data.duration)} ·
-					{project.data.interactions.length} pregunta(s) ·
+					{project.data.lessons.length} elemento(s) · {formatTime(totalDuration)} de video · {totalQuestions} pregunta(s) ·
 					{#if project.data.status === 'published'}
 						<span class="badge ok">Publicado</span>
 					{:else}
 						<span class="badge warn">Borrador</span>
 					{/if}
 				</p>
+				<ul class="lessons">
+					{#each project.data.lessons as l (l.id)}
+						<li><span class="ico">{LESSON_ICONS[l.kind]}</span> {l.title} <span class="muted">— {lessonSummary(l)}</span></li>
+					{/each}
+				</ul>
 			</div>
 			<div class="actions">
 				<a class="btn primary" href={resolve('/editor')}>✎ Abrir editor</a>
 				<a class="btn" href={resolve('/preview')}>👁 Ver como estudiante</a>
+				<a class="btn" href={resolve('/scorm')}>🎓 Simular SCORM</a>
 				<button class="btn ghost danger" onclick={() => project.reset()}>Borrar</button>
 			</div>
 		</section>
-		<h3 class="or muted">o empieza con otro video</h3>
+		<h3 class="or muted">o empieza con otros videos</h3>
 	{/if}
 
 	<section class="card new">
 		<label
 			class="drop"
 			class:over={dragOver}
-			class:has={file}
+			class:has={files.length}
 			ondragover={(e) => {
 				e.preventDefault();
 				dragOver = true;
@@ -95,42 +120,51 @@
 			ondrop={(e) => {
 				e.preventDefault();
 				dragOver = false;
-				pick(e.dataTransfer?.files[0]);
+				pick(e.dataTransfer?.files);
 			}}
 		>
-			<input type="file" accept="video/mp4,video/webm,video/*" onchange={(e) => pick(e.currentTarget.files?.[0])} hidden />
-			{#if file}
+			<input
+				type="file"
+				accept="video/mp4,video/webm,video/*"
+				multiple
+				onchange={(e) => pick(e.currentTarget.files)}
+				hidden
+			/>
+			{#if files.length}
 				<span class="big">🎬</span>
-				<strong>{file.name}</strong>
-				<span class="muted">{(file.size / 1024 / 1024).toFixed(1)} MB · clic para cambiar</span>
+				<strong>{files.length} video(s): {files.map((f) => f.name).join(', ')}</strong>
+				<span class="muted">Cada archivo será una lección de video · clic para cambiar</span>
 			{:else}
 				<span class="big">⬆</span>
-				<strong>Arrastra un MP4 aquí o haz clic para elegirlo</strong>
-				<span class="muted">El video se queda en tu navegador (IndexedDB). No se sube a ningún servidor.</span>
+				<strong>Arrastra uno o varios MP4 aquí, o haz clic para elegirlos</strong>
+				<span class="muted">Los archivos se quedan en tu navegador (IndexedDB). No se suben a ningún servidor.</span>
 			{/if}
 		</label>
 
 		<div class="row">
 			<div class="grow">
-				<label class="label" for="title">Título</label>
-				<input id="title" class="input" bind:value={title} placeholder="Ej.: Clase 3 – La célula" />
+				<label class="label" for="title">Título del curso</label>
+				<input id="title" class="input" bind:value={title} placeholder="Ej.: Curso de Biología – Módulo 1" />
 			</div>
-			<button class="btn primary" disabled={!file || busy} onclick={create}>
-				{busy ? 'Guardando…' : 'Crear video interactivo →'}
+			<button class="btn primary" disabled={!files.length || busy} onclick={create}>
+				{busy ? 'Guardando…' : 'Crear curso →'}
 			</button>
 		</div>
-		{#if !file}
+		{#if !files.length}
 			<button class="btn ghost small sample" onclick={useSample} disabled={busy}>
-				¿No tienes un video a mano? Usar el video de ejemplo (60 s)
+				¿No tienes videos a mano? Usar el video de ejemplo (60 s)
 			</button>
 		{/if}
 		{#if error}<p class="error">{error}</p>{/if}
+		<p class="muted small-note">
+			Luego, en el editor, puedes agregar páginas de contenido, cuestionarios sin video y recursos descargables.
+		</p>
 	</section>
 
 	<ol class="steps muted">
-		<li><b>1. Editor:</b> reproduce el video y en cada momento pulsa <kbd>Agregar pregunta aquí</kbd>.</li>
-		<li><b>2. Previsualizar:</b> revisa el resultado final antes de publicar.</li>
-		<li><b>3. Estudiante:</b> el video se pausa en cada pregunta, califica y muestra el resumen.</li>
+		<li><b>1. Editor:</b> arma el curso con videos y otros elementos; agrega preguntas en el momento exacto.</li>
+		<li><b>2. Previsualizar:</b> revisa la secuencia y el desbloqueo entre elementos.</li>
+		<li><b>3. Estudiante / SCORM:</b> el curso se pausa en cada pregunta, califica y reporta el progreso.</li>
 	</ol>
 </main>
 
@@ -173,10 +207,21 @@
 	}
 	.current .info {
 		flex: 1;
-		min-width: 220px;
+		min-width: 240px;
 	}
 	.current p {
 		margin: 4px 0 0;
+	}
+	.lessons {
+		list-style: none;
+		margin: 10px 0 0;
+		padding: 0;
+		display: grid;
+		gap: 2px;
+		font-size: 13px;
+	}
+	.lessons .ico {
+		margin-right: 4px;
 	}
 	.actions {
 		display: flex;
@@ -229,6 +274,10 @@
 	.sample {
 		justify-self: start;
 		color: var(--accent);
+	}
+	.small-note {
+		font-size: 12px;
+		margin: 0;
 	}
 	.error {
 		color: var(--bad);

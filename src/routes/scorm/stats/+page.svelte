@@ -3,15 +3,20 @@
 	import { resolve } from '$app/paths';
 	import { formatTime, project } from '#lib/project.svelte.ts';
 	import { COMPLETION_COVERAGE } from '#lib/scorm/tracker.svelte.ts';
-	import {
-		clearSession,
-		formatScormTime,
-		listSessions,
-		type ScormSessionData
-	} from '#lib/scorm/api.ts';
-	import type { GradeResult } from '#lib/types.ts';
+	import { clearSession, formatScormTime, listSessions, type ScormSessionData } from '#lib/scorm/api.ts';
+	import { lessonInteractions, LESSON_ICONS, LESSON_LABELS, type GradeResult, type Lesson } from '#lib/types.ts';
 
 	if (!project.data) void goto(resolve('/'), { replaceState: true });
+
+	interface LessonProgress {
+		results: Record<string, GradeResult>;
+		skipped: Record<string, true>;
+		attempts: Record<string, number>;
+		viewDone: boolean;
+		watched: number[];
+		playSeconds: number;
+		location: number;
+	}
 
 	let sessions = $state<ScormSessionData[]>([]);
 	let selected = $state('');
@@ -24,70 +29,84 @@
 	}
 	reload();
 
-	const courseId = $derived(project.data?.id ?? '');
-	const duration = $derived(project.data?.duration ?? 0);
-	const interactions = $derived(project.sorted ?? []);
+	const course = $derived(project.data);
+	const lessons = $derived(course?.lessons ?? []);
+	const courseThreshold = $derived(course?.threshold ?? 0.6);
 	const current = $derived(sessions.find((s) => s.learnerId === selected) ?? sessions[0] ?? null);
 
-	const payload = $derived.by(() => {
+	const progress = $derived.by(() => {
 		void tick;
-		if (!current?.suspendData) return null;
+		if (!current?.suspendData) return {} as Record<string, LessonProgress>;
 		try {
-			return JSON.parse(current.suspendData) as {
-				results?: Record<string, GradeResult>;
-				watched?: number[];
-				attempts?: Record<string, number>;
-				playSeconds?: number;
-				threshold?: number;
-			};
+			const p = JSON.parse(current.suspendData) as { progress?: Record<string, LessonProgress> };
+			return p.progress ?? {};
 		} catch {
-			return null;
+			return {} as Record<string, LessonProgress>;
 		}
 	});
 
-	const watchedSeconds = $derived(payload?.watched?.length ?? 0);
-	const coverage = $derived(duration > 0 ? Math.min(1, watchedSeconds / duration) : 0);
-	const scorePercent = $derived(current && current.scoreMax > 0 ? current.scoreRaw / current.scoreMax : 0);
+	interface Info {
+		done: boolean;
+		score: number;
+		max: number;
+		percent: number;
+		watched: number;
+		attempts: number;
+	}
+	function info(l: Lesson): Info {
+		const p = progress[l.id];
+		if (l.kind === 'content' || l.kind === 'resource') {
+			return { done: !!p?.viewDone, score: 0, max: 0, percent: p?.viewDone ? 1 : 0, watched: 0, attempts: 0 };
+		}
+		const ints = lessonInteractions(l);
+		const max = ints.reduce((s, i) => s + i.points, 0);
+		const score = Math.round(ints.reduce((s, i) => s + (p?.results?.[i.id]?.score ?? 0), 0) * 100) / 100;
+		const percent = max ? score / max : 1;
+		const threshold = l.kind === 'quiz' ? l.threshold : courseThreshold;
+		return {
+			done: !ints.length ? !!p?.viewDone || l.kind === 'quiz' : percent >= threshold,
+			score,
+			max,
+			percent,
+			watched: p?.watched?.length ?? 0,
+			attempts: ints.reduce((s, i) => s + (p?.attempts?.[i.id] ?? 0), 0)
+		};
+	}
+
+	const passedCount = $derived(lessons.filter((l) => info(l).done).length);
+	const totalScore = $derived(lessons.reduce((s, l) => s + info(l).score, 0));
+	const totalMax = $derived(lessons.reduce((s, l) => s + info(l).max, 0));
+	const scorePercent = $derived(totalMax ? totalScore / totalMax : 0);
 
 	const statusKind = $derived(
-		current?.lessonStatus === 'passed'
-			? 'ok'
-			: current?.lessonStatus === 'failed'
-				? 'bad'
-				: current?.lessonStatus === 'incomplete'
-					? 'warn'
-					: ''
+		current?.lessonStatus === 'passed' ? 'ok' : current?.lessonStatus === 'failed' ? 'bad' : current?.lessonStatus === 'incomplete' ? 'warn' : ''
 	);
 
 	const tips = $derived.by(() => {
 		const t: string[] = [];
 		if (!current) return ['Aún no hay sesiones SCORM para este curso.'];
-		if (coverage < COMPLETION_COVERAGE)
-			t.push(`Viste el ${Math.round(coverage * 100)}% del video: te falta ${Math.round((1 - coverage) * 100)}% para completar.`);
-		const failed = interactions.filter((i) => payload?.results?.[i.id] && !payload.results[i.id].correct);
-		if (failed.length) t.push(`${failed.length} pregunta(s) fallada(s) para repasar (${failed.map((i) => formatTime(i.time)).join(', ')}).`);
-		const threshold = payload?.threshold ?? 0.7;
-		if (scorePercent < threshold)
-			t.push(`Debes alcanzar el ${Math.round(threshold * 100)}% de puntaje para aprobar (llevas ${Math.round(scorePercent * 100)}%).`);
-		if (current.lessonStatus === 'passed') t.push('¡Lección aprobada! Puedes pasar al siguiente video.');
+		const pending = lessons.filter((l) => !info(l).done);
+		if (pending.length) t.push(`Te faltan ${pending.length} elemento(s): ${pending.map((l) => l.title).join(', ')}.`);
+		if (scorePercent < courseThreshold) t.push(`Debes alcanzar el ${Math.round(courseThreshold * 100)}% de puntaje para aprobar (llevas ${Math.round(scorePercent * 100)}%).`);
+		if (passedCount === lessons.length && lessons.length) t.push('¡Curso aprobado! Puedes pasar al siguiente módulo.');
 		if (!t.length) t.push('Sin observaciones.');
 		return t;
 	});
 
 	function resetCurrent() {
-		if (!current || !courseId) return;
-		clearSession(courseId, current.learnerId);
+		if (!current || !project.data) return;
+		clearSession(project.data.id, current.learnerId);
 		if (selected === current.learnerId) selected = '';
 		reload();
 	}
 </script>
 
 <main>
-	<header class="topbar">
+	<header class="bar">
 		<a class="btn ghost small" href={resolve('/scorm')}>← Reproductor</a>
 		<div>
 			<h1>Informe SCORM</h1>
-			<p class="muted">Estadísticas de progreso y opciones según el desempeño</p>
+			<p class="muted">Estadísticas de progreso del curso y opciones según el desempeño</p>
 		</div>
 		<span class="spacer"></span>
 		<button class="btn small" onclick={reload}>↻ Actualizar</button>
@@ -97,9 +116,7 @@
 		<div class="picker">
 			<label class="label" for="learner">Alumno</label>
 			<select id="learner" class="input" bind:value={selected}>
-				{#each sessions as s (s.learnerId)}
-					<option value={s.learnerId}>{s.learnerName} · {s.learnerId}</option>
-				{/each}
+				{#each sessions as s (s.learnerId)}<option value={s.learnerId}>{s.learnerName} · {s.learnerId}</option>{/each}
 			</select>
 		</div>
 	{/if}
@@ -111,104 +128,75 @@
 		</div>
 	{:else}
 		<div class="cards">
-			<div class="card metric">
-				<span class="k">Estado</span>
-				<span class="badge {statusKind}">{current.lessonStatus}</span>
-				<small class="muted">cmi.core.lesson_status</small>
-			</div>
-			<div class="card metric">
-				<span class="k">Puntaje</span>
-				<span class="v">{current.scoreRaw}/{current.scoreMax}</span>
-				<small class="muted">{Math.round(scorePercent * 100)}% · {current.interactions.length} interacciones</small>
-			</div>
-			<div class="card metric">
-				<span class="k">Tiempo visto</span>
-				<span class="v">{formatTime(watchedSeconds)}</span>
-				<small class="muted">de {formatTime(duration)} ({Math.round(coverage * 100)}%)</small>
-			</div>
-			<div class="card metric">
-				<span class="k">Tiempo acumulado</span>
-				<span class="v">{formatScormTime(current.totalTime + current.sessionTime)}</span>
-				<small class="muted">sesión: {formatScormTime(current.sessionTime)}</small>
-			</div>
+			<div class="card metric"><span class="k">Estado</span><span class="badge {statusKind}">{current.lessonStatus}</span><small class="muted">cmi.core.lesson_status</small></div>
+			<div class="card metric"><span class="k">Puntaje</span><span class="v">{totalScore}/{totalMax}</span><small class="muted">{Math.round(scorePercent * 100)}% · {current.interactions.length} interacciones</small></div>
+			<div class="card metric"><span class="k">Aprobados</span><span class="v">{passedCount}/{lessons.length}</span><small class="muted">elementos del curso</small></div>
+			<div class="card metric"><span class="k">Tiempo</span><span class="v">{formatScormTime(current.totalTime + current.sessionTime)}</span><small class="muted">sesión: {formatScormTime(current.sessionTime)}</small></div>
 		</div>
 
 		<section class="card">
-			<h2>Detalle por pregunta</h2>
+			<h2>Detalle por elemento</h2>
 			<table>
 				<thead>
-					<tr>
-						<th>#</th>
-						<th>Momento</th>
-						<th>Pregunta</th>
-						<th>Intentos</th>
-						<th>Resultado</th>
-					</tr>
+					<tr><th>#</th><th>Elemento</th><th>Tipo</th><th>Progreso</th><th>Puntaje</th><th>Estado</th></tr>
 				</thead>
 				<tbody>
-					{#each interactions as i, idx (i.id)}
-						{@const r = payload?.results?.[i.id]}
+					{#each lessons as l, idx (l.id)}
+						{@const d = info(l)}
 						<tr>
 							<td>{idx + 1}</td>
-							<td class="t">{formatTime(i.time)}</td>
-							<td>{i.question || 'Sin enunciado'}</td>
-							<td>{payload?.attempts?.[i.id] ?? 0}</td>
+							<td>{l.title}</td>
+							<td>{LESSON_ICONS[l.kind]} {LESSON_LABELS[l.kind]}</td>
 							<td>
-								{#if r}
-									<span class="badge {r.correct ? 'ok' : 'bad'}">{r.correct ? '✓ correcta' : '✗ incorrecta'}</span>
+								{#if l.kind === 'video'}
+									{formatTime(d.watched)}{l.duration ? ` / ${formatTime(l.duration)} (${Math.round(Math.min(1, d.watched / l.duration) * 100)}%)` : ''}
+								{:else if l.kind === 'quiz'}
+									{d.attempts} intento(s)
 								{:else}
-									<span class="badge">pendiente</span>
+									{d.done ? 'visto' : 'pendiente'}
 								{/if}
 							</td>
+							<td>{d.max ? `${d.score}/${d.max} (${Math.round(d.percent * 100)}%)` : '—'}</td>
+							<td><span class="badge {d.done ? 'ok' : ''}">{d.done ? '✓ aprobado' : 'pendiente'}</span></td>
 						</tr>
 					{/each}
-					{#if interactions.length === 0}
-						<tr><td colspan="5" class="muted">Sin preguntas evaluables.</td></tr>
+					{#if lessons.length === 0}
+						<tr><td colspan="6" class="muted">El curso no tiene elementos.</td></tr>
 					{/if}
 				</tbody>
 			</table>
+			<p class="muted tiny">Cobertura de video exigida: {Math.round(COMPLETION_COVERAGE * 100)}%.</p>
 		</section>
 
 		<section class="card">
 			<h2>Opciones según tus estadísticas</h2>
-			<ul class="tips">
-				{#each tips as tip, i (i)}
-					<li>{tip}</li>
-				{/each}
-			</ul>
+			<ul class="tips">{#each tips as tip, i (i)}<li>{tip}</li>{/each}</ul>
 			<div class="actions">
 				<a class="btn primary" href={resolve('/scorm')}>▶ {current.lessonStatus === 'not attempted' ? 'Comenzar' : 'Reanudar'}</a>
 				<button class="btn" onclick={resetCurrent}>🔄 Reiniciar esta sesión</button>
 			</div>
-			<details class="cmi">
-				<summary>Datos CMI guardados</summary>
-				<pre>{JSON.stringify(current, null, 2)}</pre>
-			</details>
+			<details class="cmi"><summary>Datos CMI guardados</summary><pre>{JSON.stringify(current, null, 2)}</pre></details>
 		</section>
 	{/if}
 </main>
 
 <style>
 	main {
-		max-width: 980px;
+		max-width: 1080px;
 		margin: 0 auto;
 		padding: 20px;
 		display: grid;
 		gap: 16px;
 	}
-	.topbar {
-		position: static;
+	.bar {
 		display: flex;
 		align-items: center;
 		gap: 12px;
-		padding: 0;
-		background: transparent;
-		border: 0;
 	}
-	.topbar h1 {
+	.bar h1 {
 		font-size: 22px;
 	}
-	.topbar p {
+	.bar p {
 		margin: 2px 0 0;
 		font-size: 13px;
 	}
@@ -269,9 +257,9 @@
 		font-size: 12px;
 		color: var(--muted);
 	}
-	td.t {
-		font-variant-numeric: tabular-nums;
-		font-weight: 700;
+	.tiny {
+		font-size: 12px;
+		margin: 10px 0 0;
 	}
 	.tips {
 		margin: 0 0 14px;

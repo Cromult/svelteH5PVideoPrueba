@@ -1,21 +1,21 @@
 // Persistencia local de la demo. En el LMS real esto se reemplaza por llamadas a NestJS
-// (JSON del video interactivo) y al storage de archivos (el MP4).
-import type { InteractiveVideo } from './types.ts';
+// (JSON del curso) y al storage de archivos (videos, imágenes y adjuntos).
+import type { Course } from './types.ts';
 
 const PROJECT_KEY = 'ivideo:project';
 const DB_NAME = 'ivideo';
 const STORE = 'videos';
 
-export function loadProject(): InteractiveVideo | null {
+export function loadProject(): unknown {
 	try {
 		const raw = localStorage.getItem(PROJECT_KEY);
-		return raw ? (JSON.parse(raw) as InteractiveVideo) : null;
+		return raw ? JSON.parse(raw) : null;
 	} catch {
 		return null;
 	}
 }
 
-export function saveProject(project: InteractiveVideo): void {
+export function saveProject(project: Course): void {
 	try {
 		localStorage.setItem(PROJECT_KEY, JSON.stringify(project));
 	} catch {
@@ -52,3 +52,8 @@ async function withStore<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) =>
 export const saveVideo = (key: string, blob: Blob) => withStore('readwrite', (s) => s.put(blob, key));
 export const loadVideo = (key: string) => withStore<Blob | undefined>('readonly', (s) => s.get(key));
 export const deleteVideo = (key: string) => withStore('readwrite', (s) => s.delete(key));
+
+// Mismo almacén de blobs para cualquier activo (imágenes de contenido, adjuntos).
+export const saveAsset = saveVideo;
+export const loadAsset = loadVideo;
+export const deleteAsset = deleteVideo;
